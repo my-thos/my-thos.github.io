@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>RakWrite Patcher</title>
+</head>
+<body>
+<input type="file" id="file">
+<button onclick="patch()">Patch</button>
+<pre id="log"></pre>
+<script>
+function log(msg) {
+    document.getElementById('log').textContent += msg + '\n';
+}
+
+function align(v, a) {
+    return Math.ceil(v / a) * a;
+}
+
+function patch() {
+    var fileInput = document.getElementById('file');
+    if (!fileInput.files[0]) {
+        log('Select a file');
+        return;
+    }
+    document.getElementById('log').textContent = '';
+
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        var original = new Uint8Array(e.target.result);
+        var fileLen = original.length;
+        var buf = new ArrayBuffer(fileLen + 0x1000);
+        var view = new DataView(buf);
+        var bytes = new Uint8Array(buf);
+        bytes.set(original, 0);
+
+        var e_lfanew = view.getUint32(0x3C, true);
+        if (view.getUint32(e_lfanew, true) != 0x00004550) {
+            log('not a valid executable');
+            return;
+        }
+        var numSections = view.getUint16(e_lfanew + 6, true);
+        var sizeOfOptHeader = view.getUint16(e_lfanew + 20, true);
+        var optOff = e_lfanew + 24;
+        var secTableOff = optOff + sizeOfOptHeader;
+        var sectionAlignment = view.getUint32(optOff + 32, true);
+        var fileAlignment = view.getUint32(optOff + 36, true);
+        var sizeOfHeaders = view.getUint32(optOff + 60, true);
+
+        var lastEnd = 0;
+        for (var i = 0; i < numSections; i++) {
+            var off = secTableOff + i * 40;
+            var vsize = view.getUint32(off + 8, true);
+            var vaddr = view.getUint32(off + 12, true);
+            if (vaddr + vsize > lastEnd) lastEnd = vaddr + vsize;
+        }
+
+        function offsetToRva(foff) {
+            for (var i = 0; i < numSections; i++) {
+                var off = secTableOff + i * 40;
+                var rawSize = view.getUint32(off + 16, true);
+                var rawPtr = view.getUint32(off + 20, true);
+                if (foff >= rawPtr && foff < rawPtr + rawSize) {
+                    var vaddr = view.getUint32(off + 12, true);
+                    return vaddr + (foff - rawPtr);
+                }
+            }
+            return -1;
+        }
+
+        var sig = [0x8B,0x50,0x18,0x8B,0x48,0x3C,0x83,0xC2,0x07,0xC1,0xEA,0x03,
+                   0x52,0x8B,0x50,0x10,0x0F,0xAF,0xD3,0x03,0x56,0x3C,0x51,0x52,0xE8];
+        var sigOff = -1;
+        for (var i = 0; i <= fileLen - sig.length; i++) {
+            var ok = true;
+            for (var j = 0; j < sig.length; j++) {
+                if (bytes[i + j] != sig[j]) { ok = false; break; }
+            }
+            if (ok) { sigOff = i; break; }
+        }
+        if (sigOff < 0) {
+            log('sig not found, may not be vulnerable');
+            return;
+        }
+
+        var sigRva = offsetToRva(sigOff);
+        var patchRva = sigRva + 12;
+        var jmpbackRva = sigRva + 19;
+
+        var cleanupStart = sigOff + 24 + 5 + 9;
+        var cleanupFileOff = -1;
+        var cleanupRva = -1;
+        for (var i = cleanupStart; i < cleanupStart + 16; i++) {
+            if (bytes[i] == 0x33 && bytes[i + 1] == 0xED) {
+                cleanupFileOff = i;
+                cleanupRva = offsetToRva(i);
+                break;
+            }
+        }
+        if (cleanupRva < 0) {
+            log('cleanup not found');
+            return;
+        }
+
+        var loopCondRva = cleanupRva - 5;
+
+        var caveRva = align(lastEnd, sectionAlignment);
+        var caveSize = 48;
+        var rawCaveSize = align(caveSize, fileAlignment);
+        var caveFileOff = fileLen;
+
+        var newSecOff = secTableOff + numSections * 40;
+        if (newSecOff + 40 > sizeOfHeaders) {
+            log('??? no room for new section');
+            return;
+        }
+
+        var cave = new Uint8Array([
+            0x52, 0x8B,0x50,0x10, 0x0F,0xAF,0xD3, 0x51, 0x52,
+            0x8B,0x4E,0x18, 0x83,0xC1,0x07, 0xC1,0xE9,0x03,
+            0x8B,0x54,0x24,0x08, 0x03,0x14,0x24, 0x39,0xCA,
+            0x5A, 0x59, 0x77,0x05,
+            0xE9, 0,0,0,0,
+            0x83,0xC4,0x04, 0x45,
+            0xE9, 0,0,0,0,
+            0x90, 0x90, 0x90
+        ]);
+        var caveView = new DataView(cave.buffer);
+        caveView.setInt32(32, jmpbackRva - (caveRva + 36), true);
+        caveView.setInt32(41, loopCondRva - (caveRva + 45), true);
+
+        var secName = '.rknpatch';
+        for (var i = 0; i < secName.length; i++) bytes[newSecOff + i] = secName.charCodeAt(i);
+        view.setUint32(newSecOff + 8, caveSize, true);
+        view.setUint32(newSecOff + 12, caveRva, true);
+        view.setUint32(newSecOff + 16, rawCaveSize, true);
+        view.setUint32(newSecOff + 20, caveFileOff, true);
+        view.setUint32(newSecOff + 36, 0xE0000020, true);
+
+        view.setUint16(e_lfanew + 6, numSections + 1, true);
+        view.setUint32(optOff + 56, align(caveRva + caveSize, sectionAlignment), true);
+
+        var patchOff = sigOff + 12;
+        view.setUint8(patchOff, 0xE9);
+        view.setInt32(patchOff + 1, caveRva - (patchRva + 5), true);
+        view.setUint8(patchOff + 5, 0x90);
+        view.setUint8(patchOff + 6, 0x90);
+
+        var output = new Uint8Array(caveFileOff + rawCaveSize);
+        output.set(bytes.subarray(0, fileLen), 0);
+        output.set(cave, caveFileOff);
+
+        var blob = new Blob([output], { type: 'application/octet-stream' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fileInput.files[0].name.replace(/\.exe$/i, '.patched.exe');
+        a.click();
+
+        log('0x' + sigRva.toString(16));
+        log('0x' + patchRva.toString(16));
+        log('0x' + caveRva.toString(16));
+        log('0x' + jmpbackRva.toString(16));
+        log('0x' + loopCondRva.toString(16));
+        log('done');
+    };
+    reader.readAsArrayBuffer(fileInput.files[0]);
+}
+</script>
+</body>
+</html>
