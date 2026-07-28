@@ -67,15 +67,56 @@ function patch() {
             return -1;
         }
 
-        var sig = [0x8B,0x50,0x18,0x8B,0x48,0x3C,0x83,0xC2,0x07,0xC1,0xEA,0x03,
-                   0x52,0x8B,0x50,0x10,0x0F,0xAF,0xD3,0x03,0x56,0x3C,0x51,0x52,0xE8];
-        var sigOff = -1;
-        for (var i = 0; i <= fileLen - sig.length; i++) {
-            var ok = true;
-            for (var j = 0; j < sig.length; j++) {
-                if (bytes[i + j] != sig[j]) { ok = false; break; }
+        function findSig(sig) {
+            for (var i = 0; i <= fileLen - sig.length; i++) {
+                var ok = true;
+                for (var j = 0; j < sig.length; j++) {
+                    if (bytes[i + j] != sig[j]) { ok = false; break; }
+                }
+                if (ok) return i;
             }
-            if (ok) { sigOff = i; break; }
+            return -1;
+        }
+
+        var variants = [
+            {
+                sig: [0x8B,0x50,0x18,0x8B,0x48,0x3C,0x83,0xC2,0x07,0xC1,0xEA,0x03,
+                      0x52,0x8B,0x50,0x10,0x0F,0xAF,0xD3,0x03,0x56,0x3C,0x51,0x52,0xE8],
+                patchOff: 12, jmpbackOff: 19, cleanupStartDelta: 38,
+                cleanupMarker: [0x33, 0xED], caveSize: 48,
+                cave: [0x52, 0x8B,0x50,0x10, 0x0F,0xAF,0xD3, 0x51, 0x52,
+                       0x8B,0x4E,0x18, 0x83,0xC1,0x07, 0xC1,0xE9,0x03,
+                       0x8B,0x54,0x24,0x08, 0x03,0x14,0x24, 0x39,0xCA,
+                       0x5A, 0x59, 0x77,0x05,
+                       0xE9, 0,0,0,0,
+                       0x83,0xC4,0x04, 0x45,
+                       0xE9, 0,0,0,0,
+                       0x90, 0x90, 0x90],
+                jmp1Pos: 32, jmp1End: 36, jmp2Pos: 41, jmp2End: 45,
+                patchNops: 2
+            },
+            {
+                sig: [0x8B,0x41,0x18,0x83,0xC0,0x07,0xC1,0xE8,0x03,
+                      0x50,0x8B,0x41,0x10,0xFF,0x71,0x3C,
+                      0x0F,0xAF,0xC3,0x8B,0x4D,0x08,0x03,0x41,0x3C,0x50,0xE8],
+                patchOff: 16, jmpbackOff: 22, cleanupStartDelta: 38,
+                cleanupMarker: [0x33, 0xDB], caveSize: 45,
+                cave: [0x0F,0xAF,0xC3, 0x8B,0x4D,0x08, 0x50, 0x52,
+                       0x8B,0x51,0x18, 0x83,0xC2,0x07, 0xC1,0xEA,0x03,
+                       0x8B,0x44,0x24,0x0C, 0x03,0x44,0x24,0x04, 0x39,0xD0,
+                       0x5A, 0x58, 0x77,0x05,
+                       0xE9, 0,0,0,0,
+                       0x83,0xC4,0x08, 0x46,
+                       0xE9, 0,0,0,0],
+                jmp1Pos: 32, jmp1End: 36, jmp2Pos: 41, jmp2End: 45,
+                patchNops: 1
+            }
+        ];
+
+        var v = null, sigOff = -1;
+        for (var vi = 0; vi < variants.length; vi++) {
+            sigOff = findSig(variants[vi].sig);
+            if (sigOff >= 0) { v = variants[vi]; break; }
         }
         if (sigOff < 0) {
             log('sig not found, may not be vulnerable');
@@ -83,15 +124,13 @@ function patch() {
         }
 
         var sigRva = offsetToRva(sigOff);
-        var patchRva = sigRva + 12;
-        var jmpbackRva = sigRva + 19;
+        var patchRva = sigRva + v.patchOff;
+        var jmpbackRva = sigRva + v.jmpbackOff;
 
-        var cleanupStart = sigOff + 24 + 5 + 9;
-        var cleanupFileOff = -1;
+        var cleanupStart = sigOff + v.cleanupStartDelta;
         var cleanupRva = -1;
         for (var i = cleanupStart; i < cleanupStart + 16; i++) {
-            if (bytes[i] == 0x33 && bytes[i + 1] == 0xED) {
-                cleanupFileOff = i;
+            if (bytes[i] == v.cleanupMarker[0] && bytes[i + 1] == v.cleanupMarker[1]) {
                 cleanupRva = offsetToRva(i);
                 break;
             }
@@ -104,9 +143,9 @@ function patch() {
         var loopCondRva = cleanupRva - 5;
 
         var caveRva = align(lastEnd, sectionAlignment);
-        var caveSize = 48;
+        var caveSize = v.caveSize;
         var rawCaveSize = align(caveSize, fileAlignment);
-        var caveFileOff = fileLen;
+        var caveFileOff = align(fileLen, fileAlignment);
 
         var newSecOff = secTableOff + numSections * 40;
         if (newSecOff + 40 > sizeOfHeaders) {
@@ -114,19 +153,10 @@ function patch() {
             return;
         }
 
-        var cave = new Uint8Array([
-            0x52, 0x8B,0x50,0x10, 0x0F,0xAF,0xD3, 0x51, 0x52,
-            0x8B,0x4E,0x18, 0x83,0xC1,0x07, 0xC1,0xE9,0x03,
-            0x8B,0x54,0x24,0x08, 0x03,0x14,0x24, 0x39,0xCA,
-            0x5A, 0x59, 0x77,0x05,
-            0xE9, 0,0,0,0,
-            0x83,0xC4,0x04, 0x45,
-            0xE9, 0,0,0,0,
-            0x90, 0x90, 0x90
-        ]);
+        var cave = new Uint8Array(v.cave);
         var caveView = new DataView(cave.buffer);
-        caveView.setInt32(32, jmpbackRva - (caveRva + 36), true);
-        caveView.setInt32(41, loopCondRva - (caveRva + 45), true);
+        caveView.setInt32(v.jmp1Pos, jmpbackRva - (caveRva + v.jmp1End), true);
+        caveView.setInt32(v.jmp2Pos, loopCondRva - (caveRva + v.jmp2End), true);
 
         var secName = '.rknpatch';
         for (var i = 0; i < secName.length; i++) bytes[newSecOff + i] = secName.charCodeAt(i);
@@ -139,11 +169,12 @@ function patch() {
         view.setUint16(e_lfanew + 6, numSections + 1, true);
         view.setUint32(optOff + 56, align(caveRva + caveSize, sectionAlignment), true);
 
-        var patchOff = sigOff + 12;
+        var patchOff = sigOff + v.patchOff;
         view.setUint8(patchOff, 0xE9);
         view.setInt32(patchOff + 1, caveRva - (patchRva + 5), true);
-        view.setUint8(patchOff + 5, 0x90);
-        view.setUint8(patchOff + 6, 0x90);
+        for (var i = 0; i < v.patchNops; i++) {
+            view.setUint8(patchOff + 5 + i, 0x90);
+        }
 
         var output = new Uint8Array(caveFileOff + rawCaveSize);
         output.set(bytes.subarray(0, fileLen), 0);
