@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>"RakWrite"</title>
+<meta property="og:title" content="RakWrite">
+<meta property="og:description" content="How a unmerged upstream fix caused Legacy Roblox clients to be vulnerable">
+<meta property="og:type" content="website">
+</head>
+<body>
+
+<h1>"RakWrite"</h1>
+
+<p>
+A heap OOB write in RakNet's split-packet reassembly logic (misattributed to DoS, <a href="https://github.com/facebookarchive/RakNet/commit/e97c4bb005ad5d98ceb04298e9921781720a1dca">reported to the RakNet project by 8ARTEK0V0</a> & fixed in 2014) that affects Legacy Roblox binaries from 2013 through mid-late 2017 due to no one merging the upstream fix.
+</p>
+
+<h2>The issue</h2>
+
+<pre>
+InternalPacket * ReliabilityLayer::BuildPacketFromSplitPacketList( SplitPacketChannel *splitPacketChannel, CCTimeType time )
+{
+#if PREALLOCATE_LARGE_MESSAGES==1
+	InternalPacket *returnedPacket=splitPacketChannel->returnedPacket;
+	RakNet::OP_DELETE(splitPacketChannel, __FILE__, __LINE__);
+	(void) time;
+	return returnedPacket;
+#else
+	unsigned int j;
+	InternalPacket * internalPacket, *splitPacket;
+	int splitPacketPartLength;
+
+	// Reconstruct
+	internalPacket = CreateInternalPacketCopy( splitPacketChannel->splitPacketList[0], 0, 0, time );
+	internalPacket->dataBitLength=0;
+	for (j=0; j < splitPacketChannel->splitPacketList.Size(); j++)
+		internalPacket->dataBitLength+=splitPacketChannel->splitPacketList[j]->dataBitLength;
+	splitPacketPartLength=BITS_TO_BYTES(splitPacketChannel->firstPacket->dataBitLength);
+
+	internalPacket->data = (unsigned char*) rakMalloc_Ex( (size_t) BITS_TO_BYTES( internalPacket->dataBitLength ), _FILE_AND_LINE_ );
+	internalPacket->allocationScheme=InternalPacket::NORMAL;
+
+	for (j=0; j < splitPacketChannel->splitPacketList.Size(); j++)
+	{
+		splitPacket=splitPacketChannel->splitPacketList[j];
+		memcpy(internalPacket->data+splitPacket->splitPacketIndex*splitPacketPartLength, splitPacket->data, (size_t) BITS_TO_BYTES(splitPacketChannel->splitPacketList[j]->dataBitLength));
+	}
+
+	for (j=0; j < splitPacketChannel->splitPacketList.Size(); j++)
+	{
+		FreeInternalPacketData(splitPacketChannel->splitPacketList[j], _FILE_AND_LINE_ );
+		ReleaseToInternalPacketPool(splitPacketChannel->splitPacketList[j]);
+	}
+	RakNet::OP_DELETE(splitPacketChannel, __FILE__, __LINE__);
+
+	return internalPacket;
+#endif
+}
+</pre>
+
+<p>
+There is no check on <code>splitPacket->splitPacketIndex*splitPacketPartLength</code>
+</p>
+<h2>PoC</h2>
+<b>NOTE: This PoC does not escalate this and is inconsistent. It only triggers a StartProcessException crash and may require multiple runs (or may trigger upon program exit). This PoC can cause unintended side-effects, not limited to corrupting Lua scripts in the game. This PoC will kick you out of the game when ran</b></p>
+<a href="poc.py">poc.py</a>
+<h2>Patch</h2>
+<p>Roblox never pulled the upstream fix that fixed it until mid-late 2017, where we observe no crashes/OOB writes. The proper fix, if you had source, would be to pull the ReliabilityLayer fixes.</p>
+<h2>Patching for Legacy Roblox clients</h2>
+<p>We don't have the source to these clients so we have to improvize. <a href="patcher">We've made a novel patcher that runs in your browser!</a> to fix this issue with mid-function-hooking in a different (security oriented) manner.</p>
+<p>The patch is a mid-function hook inside the memcpy loop of <code>BuildPacketFromSplitPacketList</code>. This is what it basically does.
+<pre>
+for (j=0; j &lt; splitPacketChannel->splitPacketList.Size(); j++)
+{
+    splitPacket=splitPacketChannel->splitPacketList[j];
+
+    if (splitPacket->splitPacketIndex * splitPacketPartLength
+        + (size_t) BITS_TO_BYTES(splitPacket->dataBitLength)
+        > (size_t) BITS_TO_BYTES(internalPacket->dataBitLength))
+        continue;
+
+    memcpy(internalPacket->data+splitPacket->splitPacketIndex*splitPacketPartLength, splitPacket->data, (size_t) BITS_TO_BYTES(splitPacketChannel->splitPacketList[j]->dataBitLength));
+}
+</pre>
+<p>This is a security fix. Our patch prevents it from writing past the buffer.</p>
+</p>
+</body>
+</html>
