@@ -82,7 +82,7 @@ for (j=0; j &lt; splitPacketChannel->splitPacketList.Size(); j++)
     memcpy(internalPacket->data+splitPacket->splitPacketIndex*splitPacketPartLength, splitPacket->data, (size_t) BITS_TO_BYTES(splitPacketChannel->splitPacketList[j]->dataBitLength));
 }
 </pre>
-<p>This is a security fix. Our patch prevents it from writing past the buffer.</p>
+<p>This is a security fix. Our patch prevents it from writing past the buffer. <b>NOTE: This patcher only currently supports Studio/Client hosting. Support for other means is being worked on.</b></p>
 </p>
 </body>
 </html>
