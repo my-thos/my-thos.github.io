@@ -66,7 +66,7 @@ There is no check on <code>splitPacket->splitPacketIndex*splitPacketPartLength</
 <a href="poc.py">poc.py</a>
 <h2>Patch</h2>
 <p>Roblox never pulled the upstream fix that fixed it until mid-late 2017, where we observe no crashes/OOB writes. The proper fix, if you had source, would be to pull the ReliabilityLayer fixes, right?</p>
-<p>Well, the fix in RakNet actually introduces a <a href="https://github.com/facebookarchive/RakNet/issues/50">bug where if packets are received out of order, it causes the packet to reassemble into a malformed packet</a>. We are recommending to also merge <a href="https://github.com/facebookarchive/RakNet/issues/50#issuecomment-94145621">Garry Newman's fix for the bug introduced</a> to avoid any issues.</>
+<p>Well, the fix in RakNet actually introduces a <a href="https://github.com/facebookarchive/RakNet/issues/50">bug where if packets are received out of order, it causes the packet to reassemble into a malformed packet</a>. We are recommending to also merge <a href="https://github.com/facebookarchive/RakNet/issues/50#issuecomment-94145621">Garry Newman's fix for the bug introduced</a> to avoid any issues.</p>
 <h2>Patching for Legacy Roblox clients</h2>
 <p>We don't have the source to these clients so we have to improvize. <a href="patcher">We've made a novel patcher that runs in your browser!</a> to fix this issue with mid-function-hooking in a different (security oriented) manner.</p>
 <p>The patch is a mid-function hook inside the memcpy loop of <code>BuildPacketFromSplitPacketList</code>. This is what it basically does.
