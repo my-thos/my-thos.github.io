@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>"The End of the Launcher"</title>
+<meta property="og:title" content="The End of the Launcher">
+<meta property="og:description" content="Using Roblox's trust in the server to achieve RCE on clients.">
+<meta property="og:type" content="website">
+</head>
+<img src="logo.png"></img>
+<h1>"The End of the Launcher"</h1>
+<p>
+We can use Roblox's trust in the server to achieve S->C RCE using malicious bytecode on clients versioned late 2014 and above.</p>
+
+<h2>The history of Bytecode on Roblox</h2>
+<p>Bytecode was used by Roblox developers back around 2008-2011 to "obfuscate" their game as there was at the time, no Lua 5.1 bytecode decompilers. A example of this is Armored Patrol, where most of the serverscripts run bytecode via loadstring.</p>
+<p>This obfuscation tactic would be killed on August 3, 2012, with Roblox citing security reasons. An excerpt from their blog post <a href="https://web.archive.org/web/20220116224345/https://blog.roblox.com/2012/08/bye-bye-bytecode/">Bye Bye Bytecode</a> explains more</p>
+<blockquote>
+    Unfortunately, the version of Lua that ROBLOX uses (5.1) has several virtual machine-level defects that can be exploited with the use of bytecode. ROBLOX user Necrobumpist found this article that discusses some of them. The nastiest one allows you to hijack the stack of another function running in another security context. In short, if you know what you are doing, you can craft a privilege elevation attack using bytecode.
+    The Lua community at one point was working on a bytecode validator for loadstring to prevent these sorts of shenanigans, but it was eventually deemed infeasible and it is now the responsibility of developers embedding Lua to filter out bad bytecode themselves (presumably by disabling it).
+</blockquote>
+<p>This flaw has been known for a while now. In 2023, I blew the whistle on it leading to it's patch in Novetus, and other launchers. Hip hip, hooray! A critical vulnerability has now been patched, and the only way to run bytecode was via loadstring. Disabling that has killed every way to execute bytecode, so there's no way this issue should come back, right?</p>
+<h2>2014</h2>
+<p>It is now late 2014 and exploiters are on the platform stealing exact LocalScript source code. Since 2012, the company has had a way to fix this, an FFlag with the name "LuaEnableBytecode". Instead of sending the client the source code of LocalScripts, this would make it so that they are compiled on the server and sent to the client. </p>
+<p>But wouldn't this be introducing a critical vulnerability again? No. Roblox is the one that compiles the source code to bytecode, and sends it to your client to run that bytecode. Roblox won't randomly send you malicious bytecode and it makes no sense for the client to have the source code to LocalScripts anyway.</p>
+<p>So, they go with it, and with this, they also remove the Lua compiler from the client. The client can now only run bytecode, and bytecode sent from the server to the client. In an attempt to confuse cheaters, they also send the bytecode to the client in a little "container" (RSB1, but I won't be getting to this here) that contains the bytecode compressed and encoded. They also remove the FFlag.</p>
+<p>This works perfectly. There are no issues. Roblox will always host the server, right?</p>
+<h2>The "Vulnerability"</h2>
+<p>With launchers, random people can host or join servers. Roblox never intended this, as they had the mentality that every person hosting would be themselves.</p>
+<p>So what is the problem? Some random guy can make my client run bytecode when I join his server? So what?</p>
+<p><a href="https://gist.github.com/corsix/6575486">The client should never run untrusted bytecode.</a> This was one of the concerns Roblox had in 2012, as it is basically a free ACE by doing so. So, let's get to the good part.</p>
+<h2>PoC</h2>
+<p>It is not in my interest to release a PoC that can be weaponized to compromise people's systems.</p>
+<p>I do want to show off the worse case scenario though.</p>
+<h2>Learning math with Old Roblox</h2>
+<video width="640" height="480" controls>
+    <source src="2026-10-22 21-37-22.mp4" type="video/mp4">
+</video>
+<h2>The patch</h2>
+<p>We've made a patch for 2014L-2016L (tested on Kanvas clients), you can download it <a href="luapatch.zip">here</a>. The tools/index.html contains an auto address grabber to help you. As of this writeup, <b>Kanvas does not have this patched. This affects 2014L-2016L on Kanvas. Do not join any 2014L-2016L servers or risk facing getting hit by this vulnerability</b></p>
+<p>This patch instead of sending bytecode to the client, sends the source code to the client, which compiles it. No LocalScripts will run on your client if the server is not patched with luapatch.</p>
+<p>Patching this gets exponentially harder over the years due to stuff like the Dynamic Bot Challenge (that runs bytecode on your client from the server to confirm you aren't a bot), random messups of the Lua VM, etc.</p>
+<h2>NOTE</h2>
+<p>This doesn't affect ORRH, or Novetus, although Kanvas is affected with every version after 2014L. This also doesn't just affect Kanvas, this affects anything that allows you to host/join on any client version after 2014L. Yes, any local_rcc server or variation of local_rcc. As said before, <b>You should only be playing servers hosted by people you trust.</b></p>
+<h2>The coordinated disclosure is dead.</h2>
+<p>We planned to release this writeup on 10/31/2026, after we had sent a patch to the Kanvas developers on 10/30/2026. After announcing the risk to people, someone had decided to publicly release a vibecoded exploit exploiting the vulnerability. Great! This is the reason why this writeup's release has been expedited to now.</p>
+
+</html>
